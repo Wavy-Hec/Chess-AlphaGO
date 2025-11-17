@@ -1,0 +1,199 @@
+# src/train_policy_gpu.py
+
+import time
+from functools import partial
+
+import jax
+import jax.numpy as jnp
+import optax
+import pgx
+from flax import linen as nn
+from flax.training import train_state
+from tqdm import trange
+
+
+# -------------------------------
+# Model
+# -------------------------------
+
+class PolicyNet(nn.Module):
+    num_actions: int
+    hidden_dim: int = 256
+
+    @nn.compact
+    def __call__(self, x):
+        """
+        x: [batch, H, W, C] or [batch, ...]
+        We just flatten and pass through 2 hidden layers.
+        """
+        x = x.reshape(x.shape[0], -1)  # flatten board features
+        x = nn.relu(nn.Dense(self.hidden_dim)(x))
+        x = nn.relu(nn.Dense(self.hidden_dim)(x))
+        logits = nn.Dense(self.num_actions)(x)
+        return logits  # [batch, num_actions]
+
+
+class TrainState(train_state.TrainState):
+    pass
+
+
+# -------------------------------
+# Data collection
+# -------------------------------
+
+def make_env(env_name: str):
+    env = pgx.make(env_name)
+
+    @jax.jit
+    def step_fn(state, key):
+        mask = state.legal_action_mask  # [num_actions]
+        logits = jnp.where(mask, 0.0, -jnp.inf)
+        key, subkey = jax.random.split(key)
+        action = jax.random.categorical(subkey, logits)
+        next_state = env.step(state, action)
+        return next_state, key
+
+    return env, step_fn
+
+
+def collect_dataset(env_name: str,
+                    num_samples: int = 5000,
+                    seed: int = 0):
+    """
+    Collects (observation, target_policy) pairs.
+
+    Target policy = uniform over legal moves.
+    This teaches the network to know what moves are legal.
+    """
+    env, step_fn = make_env(env_name)
+
+    key = jax.random.PRNGKey(seed)
+    key, sub = jax.random.split(key)
+    state = env.init(sub)
+
+    # Determine number of actions from the first state
+    num_actions = int(state.legal_action_mask.shape[0])
+
+    obs_list = []
+    target_list = []
+
+    while len(obs_list) < num_samples:
+        obs = state.observation
+        mask = state.legal_action_mask  # [num_actions], bool
+
+        # Build uniform over legal moves
+        legal = mask.astype(jnp.float32)
+        total_legal = legal.sum()
+        # In weird edge cases, avoid divide by zero
+        target = jnp.where(total_legal > 0, legal / total_legal, legal)
+
+        obs_list.append(obs)
+        target_list.append(target)
+
+        # Step environment randomly
+        state, key = step_fn(state, key)
+
+        # If game ended, re-init
+        if bool(state.terminated | state.truncated):
+            key, sub = jax.random.split(key)
+            state = env.init(sub)
+
+    obs_arr = jnp.stack(obs_list)      # [N, H, W, C]
+    target_arr = jnp.stack(target_list)  # [N, num_actions]
+
+    return obs_arr, target_arr, num_actions
+
+
+# -------------------------------
+# Loss & update
+# -------------------------------
+
+def make_train_state(rng, obs_example, num_actions: int, lr: float = 3e-4):
+    model = PolicyNet(num_actions=num_actions)
+    params = model.init(rng, obs_example[None, ...])  # add batch dim
+    tx = optax.adam(lr)
+    return TrainState.create(apply_fn=model.apply, params=params, tx=tx)
+
+
+def cross_entropy_loss(params, apply_fn, obs_batch, target_batch):
+    # obs_batch: [B, ...], target_batch: [B, num_actions]
+    logits = apply_fn(params, obs_batch)  # [B, num_actions]
+    log_probs = jax.nn.log_softmax(logits, axis=-1)
+    loss = -(target_batch * log_probs).sum(axis=-1).mean()
+    return loss
+
+
+@jax.jit
+def train_step(state: TrainState, obs_batch, target_batch):
+    loss_fn = lambda params: cross_entropy_loss(params, state.apply_fn, obs_batch, target_batch)
+    grads = jax.grad(loss_fn)(state.params)
+    state = state.apply_gradients(grads=grads)
+    loss = loss_fn(state.params)
+    return state, loss
+
+
+# -------------------------------
+# Main training loop
+# -------------------------------
+
+def train(env_name: str = "gardner_chess",
+          num_samples: int = 5000,
+          batch_size: int = 256,
+          num_epochs: int = 10,
+          seed: int = 0):
+    print("Devices:", jax.devices())
+    print(f"Environment: {env_name}")
+    print("Collecting dataset...")
+    start_data = time.time()
+    obs, targets, num_actions = collect_dataset(env_name, num_samples=num_samples, seed=seed)
+    end_data = time.time()
+    print(f"Dataset shape obs={obs.shape}, targets={targets.shape}, num_actions={num_actions}")
+    print(f"Data collection took {end_data - start_data:.2f} seconds")
+
+    rng = jax.random.PRNGKey(seed)
+    state = make_train_state(rng, obs_example=obs[0], num_actions=num_actions, lr=3e-4)
+
+    num_batches = len(obs) // batch_size
+    print(f"Training for {num_epochs} epochs, {num_batches} batches/epoch")
+    start_train = time.time()
+
+    for epoch in range(num_epochs):
+        # Simple deterministic batching (no shuffle for now)
+        losses = []
+        for i in trange(num_batches, desc=f"Epoch {epoch+1}/{num_epochs}", leave=False):
+            batch_obs = obs[i * batch_size:(i + 1) * batch_size]
+            batch_targets = targets[i * batch_size:(i + 1) * batch_size]
+            state, loss = train_step(state, batch_obs, batch_targets)
+            losses.append(float(loss))
+
+        avg_loss = sum(losses) / len(losses)
+        print(f"Epoch {epoch+1}: avg loss = {avg_loss:.4f}")
+
+    end_train = time.time()
+    print(f"Training took {end_train - start_train:.2f} seconds")
+    total_time = end_train - start_data
+    print(f"Total (data + train) time: {total_time:.2f} seconds")
+
+    # Quick sanity check on the first sample
+    logits = state.apply_fn(state.params, obs[:1])  # [1, num_actions]
+    probs = jax.nn.softmax(logits, axis=-1)[0]
+    print("First sample:")
+    print("  sum(targets[0]) =", float(targets[0].sum()))
+    print("  sum(pred_probs) =", float(probs.sum()))
+    print("  #legal moves in sample 0 =", int(targets[0].astype(bool).sum()))
+
+
+if __name__ == "__main__":
+    # Start with smaller Gardner chess (5x5)
+    train(env_name="gardner_chess",
+          num_samples=8000,
+          batch_size=256,
+          num_epochs=10,
+          seed=0)
+
+    # Later you can uncomment this to do full chess:
+    # train(env_name="chess",
+    #       num_samples=8000,
+    #       batch_size=256,
+    #       num_epochs=10,
+    #       seed=1)
