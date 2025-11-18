@@ -19,6 +19,8 @@ import time
 from functools import partial
 from typing import NamedTuple
 
+import csv  # <-- added for timing logs
+
 import haiku as hk
 import jax
 import jax.numpy as jnp
@@ -37,7 +39,7 @@ num_devices = len(devices)
 
 
 class Config(BaseModel):
-    env_id: pgx.EnvId = "go_9x9"
+    env_id: pgx.EnvId = "gardner_chess"
     seed: int = 0
     max_num_iters: int = 400
     # network params
@@ -258,6 +260,35 @@ def evaluate(rng_key, my_model):
     return R
 
 
+def render_one_game_svg(model_0, out_path: str):
+    """Play a single game with the trained model (no MCTS) and save final board as SVG."""
+    model_params, model_state = model_0
+
+    key = jax.random.PRNGKey(config.seed + 123)
+    state = env.init(key)
+
+    # Play until termination (single environment, no pmap)
+    while not bool(state.terminated):
+        # Forward pass with batch dimension 1
+        (logits, value), _ = forward.apply(
+            model_params, model_state, state.observation[None, ...], is_eval=True
+        )
+        logits = logits[0]
+        # Mask illegal actions
+        logits = logits - jnp.max(logits)
+        logits = jnp.where(state.legal_action_mask, logits, jnp.finfo(logits.dtype).min)
+        # Greedy action (could also sample)
+        action = int(jnp.argmax(logits))
+        state = env.step(state, action)
+
+    # Ensure directory exists
+    dirpath = os.path.dirname(out_path)
+    if dirpath:
+        os.makedirs(dirpath, exist_ok=True)
+    state.save_svg(out_path, color_theme="dark", scale=2.0)
+    print(f"[render] Saved final board to {out_path}")
+
+
 if __name__ == "__main__":
     wandb.init(project="pgx-az", config=config.model_dump())
 
@@ -274,6 +305,23 @@ if __name__ == "__main__":
     now = now.strftime("%Y%m%d%H%M%S")
     ckpt_dir = os.path.join("checkpoints", f"{config.env_id}_{now}")
     os.makedirs(ckpt_dir, exist_ok=True)
+
+    # NEW: timing CSV for plotting throughput / losses
+    timing_path = os.path.join(ckpt_dir, "timing.csv")
+    timing_file = open(timing_path, "w", newline="")
+    timing_writer = csv.writer(timing_file)
+    timing_writer.writerow(
+        [
+            "iteration",
+            "hours",
+            "frames",
+            "iter_frames",
+            "iter_seconds",
+            "frames_per_sec",
+            "policy_loss",
+            "value_loss",
+        ]
+    )
 
     # Initialize logging dict
     iteration: int = 0
@@ -332,7 +380,9 @@ if __name__ == "__main__":
 
         # Shuffle samples and make minibatches
         samples = jax.device_get(samples)  # (#devices, batch, max_num_steps, ...)
-        frames += samples.obs.shape[0] * samples.obs.shape[1] * samples.obs.shape[2]
+        # frames in this iteration
+        iter_frames = samples.obs.shape[0] * samples.obs.shape[1] * samples.obs.shape[2]
+        frames += iter_frames
         samples = jax.tree_util.tree_map(lambda x: x.reshape((-1, *x.shape[3:])), samples)
         rng_key, subkey = jax.random.split(rng_key)
         ixs = jax.random.permutation(subkey, jnp.arange(samples.obs.shape[0]))
@@ -353,7 +403,10 @@ if __name__ == "__main__":
         value_loss = sum(value_losses) / len(value_losses)
 
         et = time.time()
-        hours += (et - st) / 3600
+        iter_seconds = et - st
+        hours += iter_seconds / 3600.0
+        frames_per_sec = iter_frames / max(iter_seconds, 1e-8)
+
         log.update(
             {
                 "train/policy_loss": policy_loss,
@@ -362,3 +415,25 @@ if __name__ == "__main__":
                 "frames": frames,
             }
         )
+
+        # Write timing row for this iteration
+        timing_writer.writerow(
+            [
+                iteration,
+                hours,
+                frames,
+                iter_frames,
+                iter_seconds,
+                frames_per_sec,
+                policy_loss,
+                value_loss,
+            ]
+        )
+
+    # Close timing file
+    timing_file.close()
+
+    # Get single-device model and render one game as SVG
+    model_0, opt_state_0 = jax.tree_util.tree_map(lambda x: x[0], (model, opt_state))
+    svg_path = os.path.join(ckpt_dir, f"{config.env_id}_final.svg")
+    render_one_game_svg(model_0, svg_path)
