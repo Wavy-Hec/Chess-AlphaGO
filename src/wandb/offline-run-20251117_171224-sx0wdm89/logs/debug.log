@@ -1,0 +1,23 @@
+2025-11-17 17:12:24,586 INFO    MainThread:942222 [wandb_setup.py:_flush():80] Current SDK version is 0.23.0
+2025-11-17 17:12:24,586 INFO    MainThread:942222 [wandb_setup.py:_flush():80] Configure stats pid to 942222
+2025-11-17 17:12:24,586 INFO    MainThread:942222 [wandb_setup.py:_flush():80] Loading settings from /home/hector/.config/wandb/settings
+2025-11-17 17:12:24,586 INFO    MainThread:942222 [wandb_setup.py:_flush():80] Loading settings from /home/hector/RL_Projects/Chess-AlphaGO/src/wandb/settings
+2025-11-17 17:12:24,586 INFO    MainThread:942222 [wandb_setup.py:_flush():80] Loading settings from environment variables
+2025-11-17 17:12:24,586 INFO    MainThread:942222 [wandb_init.py:setup_run_log_directory():713] Logging user logs to /home/hector/RL_Projects/Chess-AlphaGO/src/wandb/offline-run-20251117_171224-sx0wdm89/logs/debug.log
+2025-11-17 17:12:24,586 INFO    MainThread:942222 [wandb_init.py:setup_run_log_directory():714] Logging internal logs to /home/hector/RL_Projects/Chess-AlphaGO/src/wandb/offline-run-20251117_171224-sx0wdm89/logs/debug-internal.log
+2025-11-17 17:12:24,586 INFO    MainThread:942222 [wandb_init.py:init():840] calling init triggers
+2025-11-17 17:12:24,586 INFO    MainThread:942222 [wandb_init.py:init():845] wandb.init called with sweep_config: {}
+config: {'env_id': 'gardner_chess', 'seed': 0, 'max_num_iters': 50, 'num_channels': 128, 'num_layers': 6, 'resnet_v2': True, 'selfplay_batch_size': 1024, 'num_simulations': 32, 'max_num_steps': 256, 'training_batch_size': 4096, 'learning_rate': 0.001, 'eval_interval': 5, '_wandb': {}}
+2025-11-17 17:12:24,586 INFO    MainThread:942222 [wandb_init.py:init():888] starting backend
+2025-11-17 17:12:24,799 INFO    MainThread:942222 [wandb_init.py:init():891] sending inform_init request
+2025-11-17 17:12:24,801 INFO    MainThread:942222 [wandb_init.py:init():899] backend started and connected
+2025-11-17 17:12:24,802 INFO    MainThread:942222 [wandb_init.py:init():969] updated telemetry
+2025-11-17 17:12:24,804 INFO    MainThread:942222 [wandb_init.py:init():993] communicating run to backend with 90.0 second timeout
+2025-11-17 17:12:24,909 INFO    MainThread:942222 [wandb_init.py:init():1040] starting run threads in backend
+2025-11-17 17:12:24,946 INFO    MainThread:942222 [wandb_run.py:_console_start():2504] atexit reg
+2025-11-17 17:12:24,946 INFO    MainThread:942222 [wandb_run.py:_redirect():2352] redirect: wrap_raw
+2025-11-17 17:12:24,946 INFO    MainThread:942222 [wandb_run.py:_redirect():2421] Wrapping output streams.
+2025-11-17 17:12:24,946 INFO    MainThread:942222 [wandb_run.py:_redirect():2444] Redirects installed.
+2025-11-17 17:12:24,947 INFO    MainThread:942222 [wandb_init.py:init():1080] run started, returning control to user process
+2025-11-17 17:12:55,706 INFO    wandb-AsyncioManager-main:942222 [service_client.py:_forward_responses():80] Reached EOF.
+2025-11-17 17:12:55,706 INFO    wandb-AsyncioManager-main:942222 [mailbox.py:close():137] Closing mailbox, abandoning 0 handles.

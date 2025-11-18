@@ -1,0 +1,8 @@
+name: pgx
+channels:
+  - defaults
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+dependencies:
+  - python=3.10
+prefix: /home/hector/anaconda3/envs/pgx
